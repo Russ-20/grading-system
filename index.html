@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PUPSJ Faculty Grading System</title>
+    <style>
+        :root { --primary: #800000; --secondary: #f4f4f4; --dark: #333; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; margin: 0; color: var(--dark); }
+        header { background: var(--primary); color: white; padding: 1rem; text-align: center; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
+        .container { max-width: 1000px; margin: 20px auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        .tab-menu { display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 2px solid var(--secondary); }
+        .tab-btn { padding: 10px 20px; cursor: pointer; border: none; background: none; font-weight: bold; color: #666; }
+        .tab-btn.active { color: var(--primary); border-bottom: 3px solid var(--primary); }
+        .section { display: none; }
+        .section.active { display: block; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+        th { background: var(--secondary); }
+        input[type="number"], input[type="text"] { width: 100%; padding: 8px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
+        .btn { padding: 10px 15px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        .btn-primary { background: var(--primary); color: white; }
+        .btn-success { background: #28a745; color: white; }
+        .status-badge { padding: 5px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: bold; }
+        .locked { background: #eee; cursor: not-allowed; }
+        .alert { padding: 10px; margin: 10px 0; border-radius: 4px; background: #fff3cd; color: #856404; border: 1px solid #ffeeba; }
+    </style>
+</head>
+<body>
+
+<header>
+    <h1>PUPSJ Faculty Grading System</h1>
+</header>
+
+<div class="container">
+    <div class="tab-menu">
+        <button class="tab-btn active" onclick="showSection('setup')">1. Setup Parameters</button>
+        <button class="tab-btn" onclick="showSection('students')">2. Student List</button>
+        <button class="tab-btn" onclick="showSection('grading')">3. Grading Sheet</button>
+        <button class="tab-btn" onclick="showSection('reports')">4. Reports</button>
+    </div>
+
+    <div id="setup" class="section active">
+        <h3>Class Standing Parameters (Total Weight: 70%)</h3>
+        <div id="param-lock-msg" class="alert" style="display:none;">Parameters are locked for the Final Period.</div>
+        <table id="param-table">
+            <thead>
+                <tr>
+                    <th>Component Name</th>
+                    <th>Weight (%)</th>
+                    <th>Perfect Score</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody id="param-body"></tbody>
+        </table>
+        <div style="margin-top:10px;">
+            <button class="btn btn-primary" id="add-param-btn" onclick="addParameterRow()">+ Add Parameter</button>
+            <p>Current Total Weight: <span id="total-weight">0</span>% / 70%</p>
+        </div>
+    </div>
+
+    <div id="students" class="section">
+        <h3>Student Roster</h3>
+        <div style="margin-bottom: 10px;">
+            <input type="text" id="student-name" placeholder="Enter Student Name" style="width: 70%;">
+            <button class="btn btn-primary" onclick="addStudent()">Add Student</button>
+        </div>
+        <table id="student-table">
+            <thead><tr><th>Student Name</th><th>Action</th></tr></thead>
+            <tbody id="student-body"></tbody>
+        </table>
+    </div>
+
+    <div id="grading" class="section">
+        <div style="display:flex; justify-content: space-between; align-items: center;">
+            <h3>Grading Period: 
+                <select id="period-select" onchange="renderGradingSheet()">
+                    <option value="midterm">Midterm</option>
+                    <option value="final">Final</option>
+                </select>
+            </h3>
+            <button class="btn btn-success" onclick="saveScores()">Save All Scores</button>
+        </div>
+        <div style="overflow-x: auto;">
+            <table id="grading-table">
+                <thead id="grading-head"></thead>
+                <tbody id="grading-body"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <div id="reports" class="section">
+        <h3>Class Grade Summary</h3>
+        <button class="btn btn-primary" onclick="exportToCSV()">Export to CSV</button>
+        <table id="report-table">
+            <thead>
+                <tr>
+                    <th>Student Name</th>
+                    <th>Midterm Grade</th>
+                    <th>Final Grade</th>
+                    <th>Remarks</th>
+                </tr>
+            </thead>
+            <tbody id="report-body"></tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+    // --- DATA STATE ---
+    let state = {
+        parameters: [], // {id, name, weight, maxScore}
+        students: [],   // {id, name, midtermScores: {}, finalScores: {}, midtermExam: 0, finalExam: 0}
+        isLocked: false
+    };
+
+    // Load from LocalStorage
+    const saved = localStorage.getItem('pupsj_data');
+    if(saved) state = JSON.parse(saved);
+
+    // --- NAVIGATION ---
+    function showSection(id) {
+        document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.getElementById(id).classList.add('active');
+        event.currentTarget.classList.add('active');
+        if(id === 'grading') renderGradingSheet();
+        if(id === 'reports') renderReport();
+        if(id === 'setup') renderParameters();
+    }
+
+    // --- PARAMETER LOGIC ---
+    function renderParameters() {
+        const body = document.getElementById('param-body');
+        const lockMsg = document.getElementById('param-lock-msg');
+        const addBtn = document.getElementById('add-param-btn');
+        
+        body.innerHTML = '';
+        state.parameters.forEach((p, index) => {
+            body.innerHTML += `
+                <tr>
+                    <td><input type="text" value="${p.name}" onchange="updateParam(${index}, 'name', this.value)" ${state.isLocked ? 'disabled' : ''}></td>
+                    <td><input type="number" value="${p.weight}" onchange="updateParam(${index}, 'weight', this.value)" ${state.isLocked ? 'disabled' : ''}></td>
+                    <td><input type="number" value="${p.maxScore}" onchange="updateParam(${index}, 'maxScore', this.value)" ${state.isLocked ? 'disabled' : ''}></td>
+                    <td>${state.isLocked ? '' : `<button onclick="removeParam(${index})">Delete</button>`}</td>
+                </tr>`;
+        });
+        
+        calculateTotalWeight();
+        lockMsg.style.display = state.isLocked ? 'block' : 'none';
+        if(state.isLocked) addBtn.style.display = 'none';
+    }
+
+    function addParameterRow() {
+        state.parameters.push({ name: '', weight: 0, maxScore: 100 });
+        renderParameters();
+    }
+
+    function updateParam(index, field, value) {
+        state.parameters[index][field] = field === 'name' ? value : parseFloat(value);
+        calculateTotalWeight();
+        saveState();
+    }
+
+    function calculateTotalWeight() {
+        const total = state.parameters.reduce((sum, p) => sum + p.weight, 0);
+        document.getElementById('total-weight').innerText = total;
+    }
+
+    // --- STUDENT LOGIC ---
+    function addStudent() {
+        const nameInput = document.getElementById('student-name');
+        if(!nameInput.value) return;
+        state.students.push({
+            id: Date.now(),
+            name: nameInput.value,
+            midtermScores: {},
+            finalScores: {},
+            midtermExam: 0,
+            finalExam: 0,
+            midtermExamMax: 100,
+            finalExamMax: 100
+        });
+        nameInput.value = '';
+        renderStudents();
+        saveState();
+    }
+
+    function renderStudents() {
+        const body = document.getElementById('student-body');
+        body.innerHTML = '';
+        state.students.forEach((s, index) => {
+            body.innerHTML += `<tr><td>${s.name}</td><td><button onclick="removeStudent(${index})">Remove</button></td></tr>`;
+        });
+    }
+
+    // --- GRADING LOGIC ---
+    function renderGradingSheet() {
+        const period = document.getElementById('period-select').value;
+        const head = document.getElementById('grading-head');
+        const body = document.getElementById('grading-body');
+        
+        // Build Header
+        let headerRow = `<tr><th>Student Name</th>`;
+        state.parameters.forEach(p => {
+            headerRow += `<th>${p.name} (${p.weight}%)</th>`;
+        });
+        headerRow += `<th>Exam (30%)</th><th>Total Grade</th></tr>`;
+        head.innerHTML = headerRow;
+
+        // Build Body
+        body.innerHTML = '';
+        state.students.forEach((s, sIdx) => {
+            let row = `<tr><td><b>${s.name}</b></td>`;
+            let classStandingSum = 0;
+
+            state.parameters.forEach(p => {
+                const scoreKey = period === 'midterm' ? 'midtermScores' : 'finalScores';
+                const score = s[scoreKey][p.name] || 0;
+                // Calculate contribution: (Score/Max) * ParameterWeight
+                const contribution = (score / p.maxScore) * p.weight;
+                classStandingSum += contribution;
+
+                row += `<td><input type="number" value="${score}" 
+                        onchange="updateScore(${sIdx}, '${p.name}', this.value, '${period}')">
+                        <small>/${p.maxScore}</small></td>`;
+            });
+
+            // Exam Column
+            const examVal = period === 'midterm' ? s.midtermExam : s.finalExam;
+            const examMax = period === 'midterm' ? s.midtermExamMax : s.finalExamMax;
+            const examContribution = (examVal / examMax) * 30;
+            const totalGrade = (classStandingSum + examContribution).toFixed(2);
+
+            row += `<td>
+                <input type="number" value="${examVal}" onchange="updateExam(${sIdx}, this.value, '${period}')">
+                <small>Max:</small><input type="number" style="width:50px" value="${examMax}" onchange="updateExamMax(${sIdx}, this.value, '${period}')">
+            </td>`;
+            row += `<td style="font-weight:bold; background:#e8f5e9">${totalGrade}</td></tr>`;
+            body.innerHTML += row;
+        });
+    }
+
+    function updateScore(sIdx, pName, val, period) {
+        const scoreKey = period === 'midterm' ? 'midtermScores' : 'finalScores';
+        state.students[sIdx][scoreKey][pName] = parseFloat(val);
+        if(period === 'midterm') state.isLocked = true; // Lock params if scores start being entered
+        saveState();
+    }
+
+    function updateExam(sIdx, val, period) {
+        if(period === 'midterm') state.students[sIdx].midtermExam = parseFloat(val);
+        else state.students[sIdx].finalExam = parseFloat(val);
+        saveState();
+    }
+
+    function updateExamMax(sIdx, val, period) {
+        if(period === 'midterm') state.students[sIdx].midtermExamMax = parseFloat(val);
+        else state.students[sIdx].finalExamMax = parseFloat(val);
+        saveState();
+    }
+
+    // --- REPORT LOGIC ---
+    function renderReport() {
+        const body = document.getElementById('report-body');
+        body.innerHTML = '';
+        state.students.forEach(s => {
+            const mGrade = calculateGrade(s, 'midterm');
+            const fGrade = calculateGrade(s, 'final');
+            const remarks = fGrade >= 75 ? 'PASSED' : 'FAILED';
+            body.innerHTML += `
+                <tr>
+                    <td>${s.name}</td>
+                    <td>${mGrade}</td>
+                    <td>${fGrade}</td>
+                    <td style="color: ${remarks==='PASSED'?'green':'red'}">${remarks}</td>
+                </tr>`;
+        });
+    }
+
+    function calculateGrade(student, period) {
+        let cs = 0;
+        state.parameters.forEach(p => {
+            const scores = period === 'midterm' ? student.midtermScores : student.finalScores;
+            cs += ((scores[p.name] || 0) / p.maxScore) * p.weight;
+        });
+        const exam = period === 'midterm' ? 
+            (student.midtermExam / student.midtermExamMax) * 30 : 
+            (student.finalExam / student.finalExamMax) * 30;
+        return (cs + exam).toFixed(2);
+    }
+
+    // --- UTILS ---
+    function saveState() {
+        localStorage.setItem('pupsj_data', JSON.stringify(state));
+    }
+
+    function saveScores() {
+        saveState();
+        alert("All scores saved successfully!");
+        renderGradingSheet();
+    }
+
+    function removeParam(i) { state.parameters.splice(i, 1); renderParameters(); saveState(); }
+    function removeStudent(i) { state.students.splice(i, 1); renderStudents(); saveState(); }
+
+    function exportToCSV() {
+        let csv = "Student Name,Midterm Grade,Final Grade,Remarks\n";
+        state.students.forEach(s => {
+            const m = calculateGrade(s, 'midterm');
+            const f = calculateGrade(s, 'final');
+            csv += `${s.name},${m},${f},${f >= 75 ? 'PASSED' : 'FAILED'}\n`;
+        });
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.setAttribute('href', url);
+        a.setAttribute('download', 'Class_Report.csv');
+        a.click();
+    }
+
+    // Initialize
+    renderParameters();
+    renderStudents();
+</script>
+
+</body>
+</html>
